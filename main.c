@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 21/11/2018 5:37:46 PM
+ * Created: 30/12/2018 5:37:46 PM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -33,20 +33,20 @@ uint8_t EEmemory[22] = "";
 
 char comandoRMC[7] = "$GPRMC";
 char comandoGGA[7] = "$GPGGA";
-char *RMC, *GGA, w;
-char status[4], phone[13], *Digits;
+char *RMC, *GGA, w, L;
+char status[4], phone[13], owner[13], *Digits; 
 int GPS_position_count=0;
 int datacount=0, datacount1=0;
-int x, y, a, i, b, H, Q;
+int x, y, a, i, b, H, R;
 int cont=0, bien=0, bien1=0, conta=0, address;
 char fix; int e;
 uint8_t failed;
 
 char input;
 char buff[20];
-char company[]	= "+XXXXXXXXXXXX";
-char company2[]	= "+XXXXXXXXXXXX";
-char owner[]	= "+XXXXXXXXXXXX";
+char company[]	= "+2547XXXXXXXX";// //Moha's No#
+char CarOwner[13];
+char company2[]	= "+2547XXXXXXXX"; //Kevin's no#
 
 //static FILE uart0_output = FDEV_SETUP_STREAM(USART0_Transmit, NULL, _FDEV_SETUP_WRITE);
 static FILE uart1_output = FDEV_SETUP_STREAM(USART1_Transmit, NULL, _FDEV_SETUP_WRITE);
@@ -63,8 +63,9 @@ unsigned char CompareNumber();
 void PrintSender();
 void CreateDraft(char m);
 int checkOKstatus(int p);
-uint8_t IP_Change_Command(); //Text "$IP:PORT"
+uint8_t IP_Change_Command(); //Text => $IP:PORT
 void StoreIP (char *NewIP);
+void Change_owner(); //to change owner's no# send => #+254XXXXXXXXX#
 
 
 #define CAR_ON	PORTA |= (1<<PORTA3)
@@ -100,7 +101,20 @@ void setup()
 
 ISR(PCINT0_vect)
 {
-	if (Q==1) {fdev_close(); stdin = &uart0_input; stdout = &uart1_output; } //if serial stream input is on RX1 change to RX0
+	//*********************************GRAB OWNER'S NUMBER********************************************//
+		EEOpen(); //grab the owner's no# from memory before matching it with the sender
+		_delay_loop_2(0);
+		for(address=40;address<53;address++) //Now grab the previous sender's no#
+		{	L = EEReadByte(address);
+			CarOwner[address-40] = L;
+		}
+		CarOwner[13]=0x00;
+	//***********************************************************************************************//
+	_delay_ms(5000);
+	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+		
+	_delay_ms(5000);
+	if (R==1) {fdev_close(); stdin = &uart0_input; stdout = &uart1_output; } //if serial stream input is on RX1 change to RX0
 	else { } //if serial stream input is on RX0 continue
 	
 	_delay_ms(50);
@@ -108,7 +122,7 @@ ISR(PCINT0_vect)
 	else
 	{ while(!(PINA & (1<<PINA0))){} }
 	
-	if (Q==1) {fdev_close(); stdin = &uart1_input; stdout = &uart1_output; } //restore serial stream to RX1
+	if (R==1) {fdev_close(); stdin = &uart1_input; stdout = &uart1_output; } //restore serial stream to RX1
 	else { } //if serial stream input was RX0 continue
 	
 	printf("AT\r\n");
@@ -118,7 +132,7 @@ ISR(PCINT0_vect)
 
 int main( void )
 {
-	
+	/**************************SD-CODE-TESTING************************************/
 	USART1_Init(MYUBRR);
 	USART0_Init(MYUBRR);
 	setup();
@@ -139,6 +153,16 @@ int main( void )
 		{	L = EEReadByte(address);
 			phone[address-26] = L; 
 		}	
+		
+	//*********************************GRAB OWNER'S NUMBER********************************************//
+	EEOpen(); //grab the owner's no# from memory before matching it with the sender
+	_delay_loop_2(0);
+	for(address=40;address<53;address++) //Now grab the previous sender's no#
+	{	L = EEReadByte(address);
+		CarOwner[address-40] = L;
+	}
+	CarOwner[13]=0x00;
+	//***********************************************************************************************//
 		/* Max clock frequency 8MHz (pre-scaler 0) */
 		//CLKPR = (1 << CLKPCE);	/* Enabled clock pre-scaler change */
 		//CLKPR = 0; /* Write pre-scaler to 0 */
@@ -146,10 +170,12 @@ int main( void )
 	fdev_close();
  	stdin = &uart0_input;
  	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isnt working
-	Q=0;
+	R=0;
 	
 	_delay_ms(5000);
-	 printf("AT+CFUN=1\r\n"); _delay_ms(30000);
+	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+	_delay_ms(5000);
+	printf("AT+CFUN=1\r\n"); _delay_ms(30000);
 	checknewSMS();
 	int S=0;
 	
@@ -161,7 +187,7 @@ int main( void )
 		fdev_close();
 		stdout = &uart1_output;
 		stdin = &uart1_input;
-		Q=1;
+		R=1;
 		_delay_us(500);
 		
 		grabGPS();
@@ -170,7 +196,7 @@ int main( void )
 		fdev_close();
 		stdout = &uart1_output;
 		stdin = &uart0_input;
-		Q=0;
+		R=0;
 		_delay_us(500);
 		
 		HTTPTransmit2 ();
@@ -255,16 +281,18 @@ int checkOKstatus(int p)
 }
 
 unsigned char CheckSMS()
-{//
+{
 	int z = 0, T=0; //char w;
 	y=0;
 	a=0;
 	printf("AT\r\n");
-  	checkOKstatus(1);
-	 _delay_ms(500);
+  	//checkOKstatus(1);
+	// _delay_ms(500);
+	 _delay_ms(2000);
 	printf("AT+CMGF=1\r\n");
-  	checkOKstatus(1);
-	 _delay_ms(500);
+  	//checkOKstatus(1);
+	// _delay_ms(500);
+	  _delay_ms(2000);
 	printf("AT+CMGL=\"REC UNREAD\"\r\n");
 	while (a < 2) //skip the <LF>
 	{//
@@ -299,6 +327,9 @@ unsigned char CheckSMS()
 		 }
 		else if (w==0x24) //If a $ is received
 		{	IP_Change_Command(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}//_delay_ms(2000);
+
+		else if (w==0x23) //If a # is received
+		{	Change_owner(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}//_delay_ms(2000);
 			
 		else
 		{	status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);} //clearing all SMS in storage AREA except Draft and UNREAD SMS
@@ -313,8 +344,9 @@ unsigned char CheckSMS()
 	}
 	else {	status[0] = 5; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);} 
 		
-	/////////////////////////////////////////////////////	
-	if (T==1) //write sender's no# in EEPROM only if its a valid SMS 
+	/////////////////////////////////////////////////////
+		
+	if (T == 1 ) //write sender's no# in EEPROM only if its a valid SMS 
 	{
 		EEOpen();
 		_delay_loop_2(0);
@@ -325,17 +357,19 @@ unsigned char CheckSMS()
 	////////////////////////////////////////////////////
 	
 	return *status;
-}
+}//
 
 void checknewSMS()
 {
-		_delay_ms(2000);
-		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART just in case it hangs at message or TCP sending
-		_delay_ms(4000);
+		_delay_ms(5000);
+		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+		_delay_ms(5000);
 		printf("AT\r\n");
-		checkOKstatus(1);
+		//checkOKstatus(1);
+		 _delay_ms(2000);
 		printf("AT+CMGF=1\r\n");
-		checkOKstatus(1);
+		//checkOKstatus(1);
+		 _delay_ms(2000);
 		printf("AT+CPMS?\r\n");
 			failed =0;
 			int q=0, M=0;;
@@ -353,20 +387,22 @@ void checknewSMS()
 				else {}
 			} 
 			else
-			{ printf("AT+CFUN=1\r\n"); _delay_ms(50000); }
+			{ /*_delay_ms(2000); printf("AT+CFUN=0\r\n");	_delay_ms(10000);*/ printf("AT+CFUN=1\r\n"); _delay_ms(50000); }
 		_delay_ms(2000);
 }
 
 void CreateDraft(char m)
 {
 	printf("AT+CMGD=1,4\r\n"); //clearing all SMS in storage AREA
-	checkOKstatus(1);
+	//checkOKstatus(1);
+	 _delay_ms(2000);
 	printf("AT+CMGW=\"");
 	PrintSender();
 	printf("\",145,\"STO UNSENT\"\r\n%c",m);
 	_delay_ms(2000);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	checkOKstatus(1);
+	//checkOKstatus(1);
+	 _delay_ms(2000);
 }
 
 unsigned char sender()
@@ -398,10 +434,10 @@ unsigned char CompareNumber()
 		if (phone[j]!=company[j])
 		{ status[1] = 1;}
 		else{}
-		if (phone[j]!=owner[j])
+		if (phone[j]!=company2[j])
 		{ status[2] = 1;}
 		else{}
-		if (phone[j]!=company2[j])
+		if (phone[j]!=CarOwner[j])
 		{ status[3] = 1;}
 		else{}
 	}
@@ -411,24 +447,28 @@ unsigned char CompareNumber()
 void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 {
 	printf("AT\r\n");
-  	checkOKstatus(1); _delay_ms(500);
+  	//checkOKstatus(1); _delay_ms(500);
+	  _delay_ms(2000);
 	printf("AT+CGATT=1\r\n");
-	checkOKstatus(1); _delay_ms(500);
+	//checkOKstatus(1); _delay_ms(500);
+	 _delay_ms(2000);
 	printf("AT+CIPMUX=0\r\n");
-	checkOKstatus(1); _delay_ms(500);
+	//checkOKstatus(1); _delay_ms(500);
+	 _delay_ms(2000);
 	printf("AT+CSTT=\"safaricom\",\"\",\"\"\r\n");
-	checkOKstatus(1); _delay_ms(500);
+	//checkOKstatus(1); _delay_ms(500);
+	 _delay_ms(2000);
 	printf("AT+CIICR\n");
-	checkOKstatus(1); _delay_ms(2000);
+	//checkOKstatus(1); _delay_ms(2000);
+	 _delay_ms(3000);
 	printf("AT+CIFSR\r\n");
 	_delay_ms(3000);
-//****************** READ IP STORED IN EEPROM ***********************************
+//********************* READ IP STORED IN EEPROM ******************************************************
 
 		EEOpen();
 		_delay_loop_2(0);
 		for(address=0;address<23;address++)
-		{	w = EEReadByte(address);
-			EEmemory[address]=w;
+		{	w = EEReadByte(address);			EEmemory[address]=w;
 		}		
 		if(EEmemory[0]!='\0')
 			{
@@ -441,7 +481,7 @@ void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", ExlonIP); //muad
 				_delay_ms(3000);
 			}
-	
+	R=1;
 	printf("AT+CIPSEND\r\n");
 	_delay_ms(2500);
 }
@@ -449,9 +489,11 @@ void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 void HTTPTransmit2 ()
 {
 	printf("\r\n\r\nAT+CIPCLOSE\r\n");
-	checkOKstatus(1); _delay_ms(500);
+	//checkOKstatus(1); _delay_ms(500);
+	 _delay_ms(2000);
 	printf("AT+CIPSHUT\r\n");
-	checkOKstatus(1); _delay_ms(500);
+	//checkOKstatus(1); _delay_ms(500);
+	 _delay_ms(2000);
 }
 
 void grabGPS()
@@ -527,14 +569,13 @@ void grabGPS()
 			}
 
 			if (x==1 && y==1)
-			{
-	
+			{	
 				EEOpen();
 				_delay_loop_2(0);
 				char L;
-				for(address=26;address<39;address++) //Now grab the previous sender's no#
+				for(address=40;address<53;address++) //Now grab the owner's no#
 				{	L = EEReadByte(address);
-					phone[address-26] = L;
+					phone[address-40] = L;
 				}
 				phone[13]=0x00;
 				Digits = (char*) malloc(13);//allocate memory for the phone number that text the tracker
@@ -542,11 +583,11 @@ void grabGPS()
 				
 				_delay_ms(500);
 
-				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC); //003-KCR , 002-KBY, 001-KCN
-				
-				_delay_ms(500);
+				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC);//003-KCR,002-KBY,001-KCN
+			
+				_delay_ms(500);				
 				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-				_delay_ms(3000);
+				_delay_ms(5000);
 
 				free(GGA); //The memory location pointed by GGA is freed. Otherwise it will cause error
 				free(RMC); //The memory location pointed by RMC is freed. Otherwise it will cause error
@@ -571,7 +612,7 @@ void grabGPS()
 
 uint8_t IP_Change_Command()
 {
-	int Flag=0, L=0, F=0, U=0;// Length=0; // ,Port=0;
+	int Flag=0, L=0, F=0, U=0;
 	char number;
 	
 	while(Flag==0)
@@ -605,15 +646,46 @@ uint8_t IP_Change_Command()
 }
 
 void StoreIP (char *NewIP)
-{
-//	uint8_t failed;	
+{	
 	//Init EEPROM
 	EEOpen();
 	_delay_loop_2(0);
 	//Write New IP in EEPROM
-//	failed=0;
 	for(address=0;address<23;address++)
-		{
-			EEWriteByte(address,NewIP[address]);
-		}
+		{ EEWriteByte(address,NewIP[address]); }
 }
+
+void Change_owner()
+{
+	int Flag=0, L=0;
+	char number;
+	
+	for(int G=0;G<13;G++) //clear the volatile owner no# buffer
+		{owner[G]='\0';}
+	
+	while(Flag==0)
+	{
+		number=getchar();
+		if (L<13 && isdigit(number) )
+		{ owner[L]= number; L++; }
+		else
+		{	
+			if (number == 0X2B)//if its + in phone no# store it
+				{if (L<2) {owner[L]= number; L++;} else {Flag=2;}}
+			else {if (L>11) {Flag=1;} else {Flag=2;}}
+		}
+	}
+////////	
+	if (Flag==1) // if the text was valid, Write new owner no# in EEPROM
+	{		
+			EEOpen();	//Init EEPROM
+			_delay_loop_2(0);
+			for(address=40;address<53;address++)
+			{	EEWriteByte(address,owner[address-40]); }
+	} 
+	else { }
+////////		
+	for(int G=0;G<13;G++) //clear the volatile owner no# buffer
+		{owner[G]='\0';}
+}
+
