@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 30/12/2018 5:37:46 PM
+ * Created: 18/01/2019 5:37:46 PM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -28,7 +28,7 @@ char satellites[2] = "";
 char IP[21] = "";
 char MemIP[23] ="";
 char FinalIP[23] = "";
-char ExlonIP[] ="XXX.XXX.XXX.XXX\",\"XXXX";
+char ExlonIP[] ="xxx.xxx.xxx.xxx\",\"xxxx";
 uint8_t EEmemory[22] = "";
 
 char comandoRMC[7] = "$GPRMC";
@@ -44,9 +44,9 @@ uint8_t failed;
 
 char input;
 char buff[20];
-char company[]	= "+2547XXXXXXXX";// //Moha's No#
+char company[]	= "+2547xxxxxxxx";// //Moha's No#
 char CarOwner[13];
-char company2[]	= "+2547XXXXXXXX"; //Kevin's no#
+char company2[]	= "+2547xxxxxxxx"; //Kevin's no#
 
 //static FILE uart0_output = FDEV_SETUP_STREAM(USART0_Transmit, NULL, _FDEV_SETUP_WRITE);
 static FILE uart1_output = FDEV_SETUP_STREAM(USART1_Transmit, NULL, _FDEV_SETUP_WRITE);
@@ -101,6 +101,11 @@ void setup()
 
 ISR(PCINT0_vect)
 {
+		fdev_close();
+		stdout = &uart1_output;
+		stdin = &uart0_input;
+		_delay_ms(500);
+		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 		EEOpen(); //grab the owner's no# from memory before matching it with the sender
 		_delay_loop_2(0);
@@ -112,27 +117,26 @@ ISR(PCINT0_vect)
 	//***********************************************************************************************//
 	_delay_ms(5000);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-		
-	_delay_ms(5000);
-	if (R==1) {fdev_close(); stdin = &uart0_input; stdout = &uart1_output; } //if serial stream input is on RX1 change to RX0
-	else { } //if serial stream input is on RX0 continue
-	
-	_delay_ms(50);
+	_delay_ms(3000);
+	printf("ATA\r\n");	 //Hang-Up command is ATH
+	_delay_ms(20000);
 	if((PINA & (1<<PINA0))){checknewSMS();}
 	else
 	{ while(!(PINA & (1<<PINA0))){} }
 	
-	if (R==1) {fdev_close(); stdin = &uart1_input; stdout = &uart1_output; } //restore serial stream to RX1
-	else { } //if serial stream input was RX0 continue
-	
-	printf("AT\r\n");
+		_delay_ms(500);
+		
+		fdev_close();
+		stdout = &uart1_output;
+		stdin = &uart1_input;
+		
+		_delay_ms(500);
 }
 
 
 
 int main( void )
 {
-	/**************************SD-CODE-TESTING************************************/
 	USART1_Init(MYUBRR);
 	USART0_Init(MYUBRR);
 	setup();
@@ -180,32 +184,31 @@ int main( void )
 	int S=0;
 	
  	sei(); //Enable global interrupts by setting the SREG's I-bit
-			
+	
+	fdev_close();
+	stdout = &uart1_output;
+	stdin = &uart1_input;		
 	while(1)
 	{ // start:
 		HTTPTransmit1 ();
-		fdev_close();
-		stdout = &uart1_output;
-		stdin = &uart1_input;
+
 		R=1;
 		_delay_us(500);
 		
 		grabGPS();
 		_delay_ms(500);
-		
-		fdev_close();
-		stdout = &uart1_output;
-		stdin = &uart0_input;
+
 		R=0;
 		_delay_us(500);
 		
 		HTTPTransmit2 ();
+		_delay_ms(500);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART just in case it hangs at message or TCP sending
 		_delay_ms(2000);
 
 		S++;
 		if (S==50)
-		{ S=0; /*printf("AT+CFUN=0\r\n"); _delay_ms(2000);*/ printf("AT+CFUN=1\r\n");  _delay_ms(35000); }
+		{ S=0; printf("AT+CFUN=1\r\n");  _delay_ms(35000); }
 		else { }
 		
 	}
@@ -286,12 +289,8 @@ unsigned char CheckSMS()
 	y=0;
 	a=0;
 	printf("AT\r\n");
-  	//checkOKstatus(1);
-	// _delay_ms(500);
 	 _delay_ms(2000);
 	printf("AT+CMGF=1\r\n");
-  	//checkOKstatus(1);
-	// _delay_ms(500);
 	  _delay_ms(2000);
 	printf("AT+CMGL=\"REC UNREAD\"\r\n");
 	while (a < 2) //skip the <LF>
@@ -357,7 +356,7 @@ unsigned char CheckSMS()
 	////////////////////////////////////////////////////
 	
 	return *status;
-}//
+}
 
 void checknewSMS()
 {
@@ -365,10 +364,8 @@ void checknewSMS()
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 		_delay_ms(5000);
 		printf("AT\r\n");
-		//checkOKstatus(1);
 		 _delay_ms(2000);
 		printf("AT+CMGF=1\r\n");
-		//checkOKstatus(1);
 		 _delay_ms(2000);
 		printf("AT+CPMS?\r\n");
 			failed =0;
@@ -387,21 +384,19 @@ void checknewSMS()
 				else {}
 			} 
 			else
-			{ /*_delay_ms(2000); printf("AT+CFUN=0\r\n");	_delay_ms(10000);*/ printf("AT+CFUN=1\r\n"); _delay_ms(50000); }
+			{printf("AT+CFUN=1\r\n"); _delay_ms(50000); }
 		_delay_ms(2000);
 }
 
 void CreateDraft(char m)
 {
 	printf("AT+CMGD=1,4\r\n"); //clearing all SMS in storage AREA
-	//checkOKstatus(1);
 	 _delay_ms(2000);
 	printf("AT+CMGW=\"");
 	PrintSender();
 	printf("\",145,\"STO UNSENT\"\r\n%c",m);
 	_delay_ms(2000);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	//checkOKstatus(1);
 	 _delay_ms(2000);
 }
 
@@ -444,22 +439,17 @@ unsigned char CompareNumber()
 	return *status;
 }
 
-void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
+void HTTPTransmit1 ()
 {
 	printf("AT\r\n");
-  	//checkOKstatus(1); _delay_ms(500);
 	  _delay_ms(2000);
 	printf("AT+CGATT=1\r\n");
-	//checkOKstatus(1); _delay_ms(500);
 	 _delay_ms(2000);
 	printf("AT+CIPMUX=0\r\n");
-	//checkOKstatus(1); _delay_ms(500);
 	 _delay_ms(2000);
 	printf("AT+CSTT=\"safaricom\",\"\",\"\"\r\n");
-	//checkOKstatus(1); _delay_ms(500);
 	 _delay_ms(2000);
 	printf("AT+CIICR\n");
-	//checkOKstatus(1); _delay_ms(2000);
 	 _delay_ms(3000);
 	printf("AT+CIFSR\r\n");
 	_delay_ms(3000);
@@ -474,8 +464,7 @@ void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 			{
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", EEmemory);
 				_delay_ms(3000);
-			}		
-		
+			}
 		else
 			{
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", ExlonIP); //muad
@@ -489,10 +478,8 @@ void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 void HTTPTransmit2 ()
 {
 	printf("\r\n\r\nAT+CIPCLOSE\r\n");
-	//checkOKstatus(1); _delay_ms(500);
 	 _delay_ms(2000);
 	printf("AT+CIPSHUT\r\n");
-	//checkOKstatus(1); _delay_ms(500);
 	 _delay_ms(2000);
 }
 
@@ -582,11 +569,7 @@ void grabGPS()
 				strcpy(Digits,phone);
 				
 				_delay_ms(500);
-
-				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC);//003-KCR,002-KBY,001-KCN
-			
-				_delay_ms(500);				
-				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC); //003-KCR,002-KBY,001-KCN								_delay_ms(500);				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 				_delay_ms(5000);
 
 				free(GGA); //The memory location pointed by GGA is freed. Otherwise it will cause error
@@ -667,7 +650,7 @@ void Change_owner()
 	{
 		number=getchar();
 		if (L<13 && isdigit(number) )
-		{ owner[L]= number; L++; }
+		{ owner[L]= number; L++; } //U is when i add "," in the IP string
 		else
 		{	
 			if (number == 0X2B)//if its + in phone no# store it
