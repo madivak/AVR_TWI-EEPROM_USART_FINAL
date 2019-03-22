@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 18/01/2019 5:37:46 PM
+ * Created: 22/03/2019 9:37:46 AM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -13,6 +13,7 @@
 #include <avr/interrupt.h>
 #include <util/delay.h>
 #include <ctype.h> //for identifying digits and alphabets
+#include <avr/wdt.h>
 
 #include "24c64.h"
 #include "USART.h"
@@ -28,7 +29,7 @@ char satellites[2] = "";
 char IP[21] = "";
 char MemIP[23] ="";
 char FinalIP[23] = "";
-char ExlonIP[] ="xxx.xxx.xxx.xxx\",\"xxxx";
+char ExlonIP[] ="XXX.XXX.XXX.XXX\",\"XXXX";
 uint8_t EEmemory[22] = "";
 
 char comandoRMC[7] = "$GPRMC";
@@ -37,21 +38,24 @@ char *RMC, *GGA, w, L;
 char status[4], phone[13], owner[13], *Digits; 
 int GPS_position_count=0;
 int datacount=0, datacount1=0;
-int x, y, a, i, b, H, R;
+int x, y, a, i, b, H, R, S=0;
 int cont=0, bien=0, bien1=0, conta=0, address;
 char fix; int e;
 uint8_t failed;
 
 char input;
 char buff[20];
-char company[]	= "+2547xxxxxxxx";// //Moha's No#
+char company[]	= "+XXXXXXXXXXXX";
 char CarOwner[13];
-char company2[]	= "+2547xxxxxxxx"; //Kevin's no#
+char company2[]	= "+XXXXXXXXXXXX";
 
 //static FILE uart0_output = FDEV_SETUP_STREAM(USART0_Transmit, NULL, _FDEV_SETUP_WRITE);
 static FILE uart1_output = FDEV_SETUP_STREAM(USART1_Transmit, NULL, _FDEV_SETUP_WRITE);
 static FILE uart1_input = FDEV_SETUP_STREAM(NULL, USART1_Receive, _FDEV_SETUP_READ);
 static FILE uart0_input = FDEV_SETUP_STREAM(NULL, USART0_Receive, _FDEV_SETUP_READ);
+
+void WDT_off(void);
+void WDT_Prescaler_Change(void);
 
 void HTTPTransmit1 ();
 void HTTPTransmit2 ();
@@ -66,15 +70,36 @@ int checkOKstatus(int p);
 uint8_t IP_Change_Command(); //Text => $IP:PORT
 void StoreIP (char *NewIP);
 void Change_owner(); //to change owner's no# send => #+254XXXXXXXXX#
+int watchdog_delay(int i);
+void Trans_Delay(); //To change delay time text-> &X , where X is either [1-4] : 1-1min,2-10min,3-30min,4-1hr
+void Blink_LED();
 
-
-#define CAR_ON	PORTA |= (1<<PORTA3)
-#define CAR_OFF	PORTA &= ~(1<<PORTA3)
-#define ACC_ON	PORTB |= (1<<PORTB0)
-#define ACC_OFF	PORTB &= ~(1<<PORTB0)
-
+/*current EEPROM Structure
+#--0[IP+PORT]23--25[vehicle_status]--26[sender_Mobile]39--40[Owner_Mobile]53---54[Trans_Delay]
+*/
+#define CAR_ON	PORTD |= (1<<PORTD5)
+#define CAR_OFF	PORTD &= ~(1<<PORTD5)
+#define ACC_ON	PORTC |= (1<<PORTC4)
+#define ACC_OFF	PORTC &= ~(1<<PORTC4)
+#define	wakeGSM	PORTA |= (1<<PORTA5)
+#define	wakeGSM1	PORTA &= ~(1<<PORTA5)
+#define	RST_GSM1	PORTA |= (1<<PORTA4)
+#define	RST_GSM2	PORTA &= ~(1<<PORTA4)
 #define CHOSEN_SECTOR 0
 #define BUFFER_SIZE 24
+
+/**************AVR_WDT********************/
+// Function Prototype
+void wdt_init(void) __attribute__((naked)) __attribute__((section(".init3")));
+// Function Implementation
+void wdt_init(void)
+{
+	MCUSR = 0;
+	wdt_disable();
+	//MCUSR &= ~(1<<WDRF); //clear Watchdog sys rst flag - should be done even if WD is not used
+	//WDTCSR &= ~(1<<WDE); //clear WD timer WD Reset Enable
+	return;
+}
 
 /**********************************
 A simple delay routine to wait
@@ -89,11 +114,20 @@ void Wait()
 
 void setup()
 {
-	DDRA |= (1<<DDA3); //set PORTA3 as output
-	DDRA &= ~(1<<DDA0); //set PORTA0 as input
-	DDRB |= (1<<DDB0); //set PORTB0 AS acc output
+	WDT_Prescaler_Change();
+	
+	DDRD |= (1<<DDD5); //set PORTA3 as output for LED
+	DDRA &= ~(1<<DDA0); //set PORTA0 as input RING pin
+	DDRC |= (1<<DDC4); //set PORTB0 AS acc output
+	DDRA |= (1<<DDA5); //set PORTB0 AS GSM-power output
+	DDRA |= (1<<DDA4); //set PORTB0 AS GSM-RST output
 	PCICR	|= (1<<PCIE0); //set interrupt enable
 	PCMSK0	|= (1<<PCINT0); //set interrupt mask bit on PA0
+	
+	wakeGSM;
+	_delay_ms(4000);
+	wakeGSM1;
+	wdt_reset();
 	
  	CAR_OFF;
  	ACC_OFF;
@@ -104,36 +138,45 @@ ISR(PCINT0_vect)
 		fdev_close();
 		stdout = &uart1_output;
 		stdin = &uart0_input;
-		_delay_ms(500);
+		watchdog_delay(1);
 		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 		EEOpen(); //grab the owner's no# from memory before matching it with the sender
 		_delay_loop_2(0);
-		for(address=40;address<53;address++) //Now grab the previous sender's no#
+		for(address=40;address<53;address++)
 		{	L = EEReadByte(address);
 			CarOwner[address-40] = L;
 		}
 		CarOwner[13]=0x00;
 	//***********************************************************************************************//
-	_delay_ms(5000);
-	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	_delay_ms(3000);
-	printf("ATA\r\n");	 //Hang-Up command is ATH
-	_delay_ms(20000);
-	if((PINA & (1<<PINA0))){checknewSMS();}
+	watchdog_delay(1);
+	putchar(0x1A);
+	watchdog_delay(3);
+	putchar(0x1A);
+	watchdog_delay(1);
+	
+	if((PINA & (1<<PINA0))){ _delay_ms(1000); checknewSMS();}
 	else
-	{ while(!(PINA & (1<<PINA0))){} }
+	{	watchdog_delay(1);printf("ATA\r\n"); watchdog_delay(15); }
 	
 		_delay_ms(500);
-		
 		fdev_close();
 		stdout = &uart1_output;
 		stdin = &uart1_input;
-		
-		_delay_ms(500);
+		_delay_ms(500);wdt_reset();
+		HTTPTransmit1 ();
+		_delay_us(500);wdt_reset();
+		grabGPS();
+		_delay_us(500);wdt_reset();
+		HTTPTransmit2 ();
+		_delay_us(2000);wdt_reset();
 }
 
-
+int watchdog_delay(int i)
+{
+	for (int g=0; g<i; g++)
+	{ wdt_reset(); _delay_ms(2000);}
+}
 
 int main( void )
 {
@@ -146,17 +189,17 @@ int main( void )
 		EEOpen();
 		_delay_loop_2(0);
 		L = EEReadByte(25);
-		if (L== 0x030) //If vehicle status is '0' Then switch off the vehicle
+		if (L== 0x030) //If vehicle status is '0' Then switch OFF the vehicle
  		{ CAR_OFF; ACC_OFF; status[0]= L;} 
-		else if (L == 0x031) //If vehicle status is '1' Then switch off the vehicle
+		else if (L == 0x031) //If vehicle status is '1' Then switch ON the vehicle
 		{ CAR_ON; ACC_ON; status[0]= L;}
 		else {}
 
-		//Now grab the previous sender's no#
-		for(address=26;address<39;address++)
-		{	L = EEReadByte(address);
-			phone[address-26] = L; 
-		}	
+	//	//Now grab the previous sender's no#
+	//	for(address=26;address<39;address++)
+	//	{	L = EEReadByte(address);
+	//		phone[address-26] = L; 
+	//	}	
 		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 	EEOpen(); //grab the owner's no# from memory before matching it with the sender
@@ -167,21 +210,21 @@ int main( void )
 	}
 	CarOwner[13]=0x00;
 	//***********************************************************************************************//
-		/* Max clock frequency 8MHz (pre-scaler 0) */
-		//CLKPR = (1 << CLKPCE);	/* Enabled clock pre-scaler change */
-		//CLKPR = 0; /* Write pre-scaler to 0 */
+	/* Max clock frequency 8MHz (pre-scaler 0) */
+	//CLKPR = (1 << CLKPCE);	/* Enabled clock pre-scaler change */
+	//CLKPR = 0; /* Write pre-scaler to 0 */
 	
 	fdev_close();
  	stdin = &uart0_input;
  	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isnt working
 	R=0;
 	
-	_delay_ms(5000);
+	watchdog_delay(3);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	_delay_ms(5000);
-	printf("AT+CFUN=1\r\n"); _delay_ms(30000);
+	watchdog_delay(3);
+	printf("AT+CFUN=1\r\n"); watchdog_delay(15);
 	checknewSMS();
-	int S=0;
+	S=0;
 	
  	sei(); //Enable global interrupts by setting the SREG's I-bit
 	
@@ -189,31 +232,40 @@ int main( void )
 	stdout = &uart1_output;
 	stdin = &uart1_input;		
 	while(1)
-	{ // start:
+	{ 
 		HTTPTransmit1 ();
-
-		R=1;
-		_delay_us(500);
+		watchdog_delay(1);
 		
 		grabGPS();
-		_delay_ms(500);
-
-		R=0;
-		_delay_us(500);
+		watchdog_delay(1);
 		
 		HTTPTransmit2 ();
 		_delay_ms(500);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART just in case it hangs at message or TCP sending
-		_delay_ms(2000);
-
-		S++;
-		if (S==50)
-		{ S=0; printf("AT+CFUN=1\r\n");  _delay_ms(35000); }
-		else { }
+		watchdog_delay(1);
 		
+/********************Adding Delay on Transmission**********************/
+		char q; 
+		EEOpen();
+		_delay_loop_2(0);
+		q = EEReadByte(54);
+			//NOTE: transmission by default happens after around 40sec
+			if	(q==0x31) { watchdog_delay(10);}	//1-1min,
+			else if(q==0x32) { watchdog_delay(280);}	//2-10min
+			else if(q==0x33) { watchdog_delay(880);}	//3-30min
+			else if(q==0x34) { watchdog_delay(1780);}	//4-1hr
+			else   {}
+/*********************************************************/
+		S++;
+		if (S==100)
+		{ S=0; RST_GSM1; watchdog_delay(1); RST_GSM2; watchdog_delay(5); printf("AT+CFUN=1\r\n"); watchdog_delay(17); }
+		else { }
 	}
 	return 0;
 }
+
+void Blink_LED()
+{ CAR_ON; _delay_ms(2000); CAR_OFF; _delay_ms(2000); }
 
 int checkOKstatus(int p)
 {
@@ -262,14 +314,14 @@ int checkOKstatus(int p)
 			else {}
 		}
 		else
-		{/*printf("AT+CFUN=0\r\n");	_delay_ms(20000); */ printf("AT+CFUN=1\r\n"); _delay_ms(30000);}
+		{printf("AT+CFUN=1\r\n"); watchdog_delay(15);}
 	}
 	else if(p==4) //Run through until u get the '+' in "+HTTPACTION"
 	{
 		int V=0;
 		w = getchar();
 		if (byteGPS == -1)
-			{/*empty port*/_delay_ms(2000);}
+			{/*empty port*/watchdog_delay(1);}
 		else
 		{
 			while (V<2)
@@ -289,9 +341,9 @@ unsigned char CheckSMS()
 	y=0;
 	a=0;
 	printf("AT\r\n");
-	 _delay_ms(2000);
+  	watchdog_delay(1);
 	printf("AT+CMGF=1\r\n");
-	  _delay_ms(2000);
+  	watchdog_delay(1);
 	printf("AT+CMGL=\"REC UNREAD\"\r\n");
 	while (a < 2) //skip the <LF>
 	{//
@@ -322,26 +374,29 @@ unsigned char CheckSMS()
 				CreateDraft(w);
 			}
 			else //A scenario of receiving text from Unauthorized no#
-			{	status[0] = 2; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);} //clearing all SMS in storage AREA except Draft and UNREAD SMS
+			{	status[0] = 2; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
 		 }
 		else if (w==0x24) //If a $ is received
-		{	IP_Change_Command(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}//_delay_ms(2000);
+		{	IP_Change_Command(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 
 		else if (w==0x23) //If a # is received
-		{	Change_owner(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}//_delay_ms(2000);
+		{	Change_owner();  status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+		
+		else if (w==0x26) //If a & is received
+		{	Trans_Delay(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 			
 		else
-		{	status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);} //clearing all SMS in storage AREA except Draft and UNREAD SMS
+		{	status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
 	}
 	else if(w==0x04F) // if w = 'O'
 	{
 			w = getchar();
 			if (w==0x04B) // if w = 'K'  If there is no new message
-			{	status[0] = 3; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);}
+			{	status[0] = 3; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 			else
-			{	status[0] = 4; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);}
+			{	status[0] = 4; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 	}
-	else {	status[0] = 5; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }//_delay_ms(2000);} 
+	else {	status[0] = 5; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 		
 	/////////////////////////////////////////////////////
 		
@@ -360,13 +415,15 @@ unsigned char CheckSMS()
 
 void checknewSMS()
 {
-		_delay_ms(5000);
+		watchdog_delay(2);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-		_delay_ms(5000);
+		watchdog_delay(2);
 		printf("AT\r\n");
-		 _delay_ms(2000);
+		watchdog_delay(1);
 		printf("AT+CMGF=1\r\n");
-		 _delay_ms(2000);
+		watchdog_delay(1);
+		printf("AT+CPMS=\"MT\",\"SM\",\"ME\"\r\n");
+		watchdog_delay(1);
 		printf("AT+CPMS?\r\n");
 			failed =0;
 			int q=0, M=0;;
@@ -384,20 +441,21 @@ void checknewSMS()
 				else {}
 			} 
 			else
-			{printf("AT+CFUN=1\r\n"); _delay_ms(50000); }
-		_delay_ms(2000);
+			{printf("AT+CFUN=1\r\n"); watchdog_delay(25); }
+		watchdog_delay(1);
 }
 
 void CreateDraft(char m)
 {
 	printf("AT+CMGD=1,4\r\n"); //clearing all SMS in storage AREA
-	 _delay_ms(2000);
+	watchdog_delay(1);
 	printf("AT+CMGW=\"");
 	PrintSender();
 	printf("\",145,\"STO UNSENT\"\r\n%c",m);
-	_delay_ms(2000);
+	watchdog_delay(1);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	 _delay_ms(2000);
+	//checkOKstatus(1);
+	watchdog_delay(1);
 }
 
 unsigned char sender()
@@ -439,20 +497,20 @@ unsigned char CompareNumber()
 	return *status;
 }
 
-void HTTPTransmit1 ()
+void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 {
 	printf("AT\r\n");
-	  _delay_ms(2000);
+  	watchdog_delay(1);
 	printf("AT+CGATT=1\r\n");
-	 _delay_ms(2000);
+	watchdog_delay(1);
 	printf("AT+CIPMUX=0\r\n");
-	 _delay_ms(2000);
+	watchdog_delay(1);
 	printf("AT+CSTT=\"safaricom\",\"\",\"\"\r\n");
-	 _delay_ms(2000);
+	watchdog_delay(1);
 	printf("AT+CIICR\n");
-	 _delay_ms(3000);
+	watchdog_delay(2);
 	printf("AT+CIFSR\r\n");
-	_delay_ms(3000);
+	watchdog_delay(2);
 //********************* READ IP STORED IN EEPROM ******************************************************
 
 		EEOpen();
@@ -463,24 +521,25 @@ void HTTPTransmit1 ()
 		if(EEmemory[0]!='\0')
 			{
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", EEmemory);
-				_delay_ms(3000);
-			}
+				watchdog_delay(2);
+			}		
+		
 		else
 			{
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", ExlonIP); //muad
-				_delay_ms(3000);
+				watchdog_delay(2);
 			}
 	R=1;
 	printf("AT+CIPSEND\r\n");
-	_delay_ms(2500);
+	watchdog_delay(1); _delay_ms(500);
 }
 
 void HTTPTransmit2 ()
 {
 	printf("\r\n\r\nAT+CIPCLOSE\r\n");
-	 _delay_ms(2000);
+	watchdog_delay(1);
 	printf("AT+CIPSHUT\r\n");
-	 _delay_ms(2000);
+	watchdog_delay(1);
 }
 
 void grabGPS()
@@ -569,8 +628,9 @@ void grabGPS()
 				strcpy(Digits,phone);
 				
 				_delay_ms(500);
-				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC); //003-KCR,002-KBY,001-KCN								_delay_ms(500);				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-				_delay_ms(5000);
+
+				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC); //003-KCR , 002-KBY, 001-KCN, 004-KCQ777T, 005-KCQ-885W								_delay_ms(500);				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+				watchdog_delay(2);
 
 				free(GGA); //The memory location pointed by GGA is freed. Otherwise it will cause error
 				free(RMC); //The memory location pointed by RMC is freed. Otherwise it will cause error
@@ -638,6 +698,30 @@ void StoreIP (char *NewIP)
 		{ EEWriteByte(address,NewIP[address]); }
 }
 
+void Trans_Delay()
+{
+	int Flag=0;
+	char number;
+	
+		number=getchar();
+			if	   (number==0x31) { Flag=1;} 
+			else if(number==0x32) { Flag=1;}
+			else if(number==0x33) { Flag=1;}
+			else if(number==0x34) { Flag=1;}
+			else   { Flag=2;}
+			
+/******store delay time in EEPROM*******/			
+	if (Flag==1)
+	{   //Init EEPROM
+		EEOpen();
+		_delay_loop_2(0);
+		//Write New Delay-Time in EEPROM
+		EEWriteByte(54,number);
+	} 
+	else {}
+/**************************************/
+}
+
 void Change_owner()
 {
 	int Flag=0, L=0;
@@ -670,5 +754,29 @@ void Change_owner()
 ////////		
 	for(int G=0;G<13;G++) //clear the volatile owner no# buffer
 		{owner[G]='\0';}
+ }
+
+void WDT_off(void)
+{
+	cli();
+	wdt_reset();
+	/* Clear WDRF in MCUSR */
+	MCUSR &= ~(1<<WDRF);
+	/* Write logical one to WDCE (WD Change Enable) and WDE (WD Reset Enable) */
+	/* Keep old prescaler setting to prevent unintentional time-out */
+	WDTCSR |= (1<<WDCE) | (1<<WDE); //WDTCSR (WD Timer Control Register)
+	/* Turn off WDT */
+	WDTCSR = 0x00;
+	sei();
 }
 
+void WDT_Prescaler_Change(void)
+{
+	cli();
+	wdt_reset();
+	/* Start timed sequence */
+	WDTCSR |= (1<<WDCE) | (1<<WDE);
+	/* Set new prescaler(time-out) value = 64K cycles (~8 s) */
+	WDTCSR = (1<<WDE) | (1<<WDP3) | (1<<WDP0);
+	sei();
+}
