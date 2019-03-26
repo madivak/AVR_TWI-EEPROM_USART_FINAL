@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 22/03/2019 5:37:46 PM
+ * Created: 26/03/2019 5:37:46 PM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -30,6 +30,7 @@ char IP[21] = "";
 char MemIP[23] ="";
 char FinalIP[23] = "";
 char ExlonIP[] ="XXX.XXX.XXX.XXX\",\"XXXX";
+char ID[] = "201800XXX"; //003-KCR , 002-KBY, 001-KCN, 004-KCQ777T, 005-KCQ-885W
 uint8_t EEmemory[22] = "";
 
 char comandoRMC[7] = "$GPRMC";
@@ -38,7 +39,7 @@ char *RMC, *GGA, w, L;
 char status[4], phone[13], owner[13], *Digits; 
 int GPS_position_count=0;
 int datacount=0, datacount1=0;
-int x, y, a, i, b, H, R, S=0;
+int x, y, a, i, b, H, R, S=0, p=0;
 int cont=0, bien=0, bien1=0, conta=0, address;
 char fix; int e;
 uint8_t failed;
@@ -66,16 +67,17 @@ unsigned char sender();
 unsigned char CompareNumber();
 void PrintSender();
 void CreateDraft(char m);
-int checkOKstatus(int p);
 uint8_t IP_Change_Command(); //Text => $IP:PORT
 void StoreIP (char *NewIP);
 void Change_owner(); //to change owner's no# send => #+254XXXXXXXXX#
 int watchdog_delay(int i);
 void Trans_Delay(); //To change delay time text-> &X , where X is either [1-4] : 1-1min,2-10min,3-30min,4-1hr
 void Blink_LED();
+void SendConf_Text();
+void Track(); //send text to request for Location <LOCATION>
 
 /*current EEPROM Structure
-#--0[IP+PORT]23--25[vehicle_status]--26[sender_Mobile]39--40[Owner_Mobile]53---54[Trans_Delay]
+#--0[IP+PORT]23--25[vehicle_status]--26[sender_Mobile]39--40[Owner_Mobile]53---54[Trans_Delay]--55[Text status]
 */
 #define CAR_ON	PORTD |= (1<<PORTD5)
 #define CAR_OFF	PORTD &= ~(1<<PORTD5)
@@ -114,8 +116,6 @@ void Wait()
 
 void setup()
 {
-	WDT_Prescaler_Change();
-	
 	DDRD |= (1<<DDD5); //set PORTA3 as output for LED
 	DDRA &= ~(1<<DDA0); //set PORTA0 as input RING pin
 	DDRC |= (1<<DDC4); //set PORTB0 AS acc output
@@ -131,51 +131,18 @@ void setup()
 	
  	CAR_OFF;
  	ACC_OFF;
-}
-
-ISR(PCINT0_vect)
-{
-		fdev_close();
-		stdout = &uart1_output;
-		stdin = &uart0_input;
-		watchdog_delay(1);
+	
+	char L;
+	EEOpen();
+	_delay_loop_2(0);
+	L = EEReadByte(25);
+	if (L== 0x030) //If vehicle status is '0' Then switch OFF the vehicle
+	{ CAR_OFF; ACC_OFF; status[0]= L;}
+	else if (L == 0x031) //If vehicle status is '1' Then switch ON the vehicle
+	{ CAR_ON; ACC_ON; status[0]= L;}
+	else {}
 		
-	//*********************************GRAB OWNER'S NUMBER********************************************//
-		EEOpen(); //grab the owner's no# from memory before matching it with the sender
-		_delay_loop_2(0);
-		for(address=40;address<53;address++)
-		{	L = EEReadByte(address);
-			CarOwner[address-40] = L;
-		}
-		CarOwner[13]=0x00;
-	//***********************************************************************************************//
-	watchdog_delay(1);
-	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	watchdog_delay(3);
-	putchar(0x1A);
-	watchdog_delay(1);
-	
-	if((PINA & (1<<PINA0))){ _delay_ms(1000); checknewSMS();}
-	else
-	{	watchdog_delay(1);printf("ATA\r\n"); watchdog_delay(15); }
-	
-		_delay_ms(500);
-		fdev_close();
-		stdout = &uart1_output;
-		stdin = &uart1_input;
-		_delay_ms(500);wdt_reset();
-		HTTPTransmit1 ();
-		_delay_us(500);wdt_reset();
-		grabGPS();
-		_delay_us(500);wdt_reset();
-		HTTPTransmit2 ();
-		_delay_us(2000);wdt_reset();
-}
-
-int watchdog_delay(int i)
-{
-	for (int g=0; g<i; g++)
-	{ wdt_reset(); _delay_ms(2000);}
+	WDT_Prescaler_Change(); //change wdt prescaler to 8 Sec
 }
 
 int main( void )
@@ -184,22 +151,10 @@ int main( void )
 	USART0_Init(MYUBRR);
 	setup();
 	
-	_delay_us(1000);
-		char L;
-		EEOpen();
-		_delay_loop_2(0);
-		L = EEReadByte(25);
-		if (L== 0x030) //If vehicle status is '0' Then switch OFF the vehicle
- 		{ CAR_OFF; ACC_OFF; status[0]= L;} 
-		else if (L == 0x031) //If vehicle status is '1' Then switch ON the vehicle
-		{ CAR_ON; ACC_ON; status[0]= L;}
-		else {}
-
-// 		//Now grab the previous sender's no#
-// 		for(address=26;address<39;address++)
-// 		{	L = EEReadByte(address);
-// 			phone[address-26] = L; 
-// 		}	
+	fdev_close();
+	stdin = &uart0_input;
+	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 for someweird reason on Atmega1284p SMD isnt working
+	_delay_us(1000);	
 		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 	EEOpen(); //grab the owner's no# from memory before matching it with the sender
@@ -213,19 +168,21 @@ int main( void )
 		/* Max clock frequency 8MHz (pre-scaler 0) */
 		//CLKPR = (1 << CLKPCE);	/* Enabled clock pre-scaler change */
 		//CLKPR = 0; /* Write pre-scaler to 0 */
-	
-	fdev_close();
- 	stdin = &uart0_input;
- 	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isnt working
-	R=0;
-	
-	watchdog_delay(3);
+	watchdog_delay(1);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	watchdog_delay(3);
-	printf("AT+CFUN=1\r\n"); watchdog_delay(15);
-	checknewSMS();
-	S=0;
+	watchdog_delay(2);
+	printf("AT+CFUN=1\r\n"); watchdog_delay(5);
 	
+	int T;
+	EEOpen();
+	_delay_loop_2(0);
+	T = EEReadByte(55);
+	if (T==1) { SendConf_Text();} //if the send text flag was set please send vehicle status to sender
+	else{}
+		
+	checknewSMS();
+
+	S=0;	
  	sei(); //Enable global interrupts by setting the SREG's I-bit
 	
 	fdev_close();
@@ -258,87 +215,57 @@ int main( void )
 /*********************************************************/
 		S++;
 		if (S==100)
-		{ S=0; RST_GSM1; watchdog_delay(1); RST_GSM2; watchdog_delay(5); printf("AT+CFUN=1\r\n"); watchdog_delay(17); }
+		{ S=0; RST_GSM1; watchdog_delay(1); RST_GSM2; watchdog_delay(5); printf("AT+CFUN=1\r\n"); watchdog_delay(5); }
 		else { }
 	}
 	return 0;
 }
 
-void Blink_LED()
-{ CAR_ON; _delay_ms(2000); CAR_OFF; _delay_ms(2000); }
-
-int checkOKstatus(int p)
+ISR(PCINT0_vect)
 {
-	b=0;
-	w = getchar();
-	while (w!=0x0A) // skip preceding '/n'
-	{	w = getchar();	}//
-
-	if (p==1) //if we are only checking for Ok status
-	{
-		w = getchar();
-		if (w==0x04F) // if next character is 'O'
-		{	w = getchar();
-			if (w==0x04B) {	w = getchar();	b=1;} // if w = K
-			else{b=2;}
-		}//
-		else{b=2; _delay_ms(500);}
-	}//
-	else if(p==2)//if we are checking for "SHUT OK"
-	{
-		for (int i=1; i<6;i++) //skip through 1st 5 char of "SHUT OK"
-		{ w = getchar();}
-		w = getchar();
-		if (w==0x04F) // if next character after 'SHUT'is 'O'
-		{	w = getchar();
-			if (w!=0x04B) {	w = getchar();	b=1;} // if w = K
-			else{b=2;}
-		}
-		else{b=2;}
-	}
-	else if(p==3)//if we are checking for new sms
-	{
-		w = getchar();
-		while (w !=  0x2B || w !=  0x45 ) //w is not + or "ERROR"
-		{ w = getchar();}
-		int q=0;
-		if (w ==  0x2B) //if there is a possibility of a new SMS
-		{
-			while (q<7)
-			{	w = getchar();
-				if (w==0x2C) { q++;} //if w is "," in the string +CPMS: "MT",1,75,"SM",1,25,"ME",0,50
-				else{}
-			}
-			w = getchar();
-			if (w != 0x30)	{CheckSMS();}
-			else {}
-		}
-		else
-		{printf("AT+CFUN=1\r\n"); watchdog_delay(15);}
-	}
-	else if(p==4) //Run through until u get the '+' in "+HTTPACTION"
-	{
-		int V=0;
-		w = getchar();
-		if (byteGPS == -1)
-			{/*empty port*/watchdog_delay(1);}
-		else
-		{
-			while (V<2)
-			{ if(w==0x0A) {V++;} w = getchar();}
-		}
-
-	}
+	fdev_close();
+	stdout = &uart1_output;
+	stdin = &uart0_input;
+	watchdog_delay(1);
 	
-	else{}
+	//*********************************GRAB OWNER'S NUMBER********************************************//
+	EEOpen(); //grab the owner's no# from memory before matching it with the sender
+	_delay_loop_2(0);
+	for(address=40;address<53;address++)
+	{	L = EEReadByte(address);
+		CarOwner[address-40] = L;
+	}
+	CarOwner[13]=0x00;
+	//***********************************************************************************************//
+	watchdog_delay(1);
+	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+	watchdog_delay(3);
+	putchar(0x1A); //running it twice cause the GSM sometimes acts-up
+	watchdog_delay(2);
+	 
+	if((PINA & (1<<PINA0))){ _delay_ms(1000); checknewSMS();}
+	else
+	{  printf("ATA\r\n"); watchdog_delay(15); }
+	
 	_delay_ms(500);
- return b;
+	fdev_close();
+	stdout = &uart1_output;
+	stdin = &uart1_input;
 }
+
+int watchdog_delay(int i)
+{
+	for (int g=0; g<i; g++)
+	{ wdt_reset(); _delay_ms(2000);}
+}
+
+void Blink_LED()
+{ CAR_ON; watchdog_delay(1); CAR_OFF; watchdog_delay(1);}
 
 unsigned char CheckSMS()
 {
-	int z = 0, T=0; //char w;
-	y=0;
+	int z = 0, T=0;
+	y=0; p=100;
 	a=0;
 	printf("AT\r\n");
   	watchdog_delay(1);
@@ -384,6 +311,9 @@ unsigned char CheckSMS()
 		
 		else if (w==0x26) //If a & is received
 		{	Trans_Delay(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+
+		else if (w==0x3C) //If a < is received
+		{	Track(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 			
 		else
 		{	status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
@@ -409,13 +339,20 @@ unsigned char CheckSMS()
 		{ EEWriteByte(address,phone[address-26]); }
 	}
 	////////////////////////////////////////////////////
+	int L;
+	EEOpen();
+	_delay_loop_2(0);
+	L = EEReadByte(55);
+	if (L==1) { _delay_ms(10000);} //if the send text flag was set reset device & send vehicle status to sender
+	else{}
 	
+		
 	return *status;
 }
 
 void checknewSMS()
 {
-		watchdog_delay(2);
+		watchdog_delay(1);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 		watchdog_delay(2);
 		printf("AT\r\n");
@@ -441,7 +378,7 @@ void checknewSMS()
 				else {}
 			} 
 			else
-			{printf("AT+CFUN=1\r\n"); watchdog_delay(25); }
+			{printf("AT+CFUN=1\r\n"); watchdog_delay(5); }
 		watchdog_delay(1);
 }
 
@@ -454,7 +391,6 @@ void CreateDraft(char m)
 	printf("\",145,\"STO UNSENT\"\r\n%c",m);
 	watchdog_delay(1);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
-	//checkOKstatus(1);
 	watchdog_delay(1);
 }
 
@@ -530,7 +466,6 @@ void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
 				printf("AT+CIPSTART=\"TCP\",\"%s\"\r\n", ExlonIP); //muad
 				watchdog_delay(2);
 			}
-	R=1;
 	printf("AT+CIPSEND\r\n");
 	watchdog_delay(1); _delay_ms(500);
 }
@@ -622,23 +557,23 @@ void grabGPS()
 				char L;
 				for(address=40;address<53;address++) //Now grab the owner's no#
 				{	L = EEReadByte(address);
-					phone[address-40] = L;
+					CarOwner[address-40] = L;
 				}
-				phone[13]=0x00;
-				Digits = (char*) malloc(13);//allocate memory for the phone number that text the tracker
-				strcpy(Digits,phone);
+				CarOwner[13]=0x00;
+				Digits = (char*) malloc(13);//allocate memory for the Owner's phone number
+				strcpy(Digits,CarOwner);
 				
 				_delay_ms(500);
 
-				printf("\r\nID=201800003&String=%c:%s:%c:%c%c:%s\"\r\n",status[0],Digits,fix, satellites[0], satellites[1], RMC); //003-KCR , 002-KBY, 001-KCN, 004-KCQ777T, 005-KCQ-885W
+				printf("\r\nID=%s&String=%c:%s:%c:%c%c:%s\"\r\n",ID, status[0],Digits,fix, satellites[0], satellites[1], RMC);
 				
 				_delay_ms(500);
 				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 				watchdog_delay(2);
 
-				free(GGA); //The memory location pointed by GGA is freed. Otherwise it will cause error
-				free(RMC); //The memory location pointed by RMC is freed. Otherwise it will cause error
-				free(Digits);
+				free(GGA); 	//The memory location pointed by GGA is freed. Otherwise it will cause error
+				free(RMC);	//The RMC string
+				free(Digits);	//The  Digits string
 				_delay_ms(500);
 			}
 			else{}
@@ -759,6 +694,76 @@ void Change_owner()
 		{owner[G]='\0';}
  }
 
+void SendConf_Text()
+{
+	char line1[70] = "";
+	int comma[4]; a=0;
+	int p=0, j=0;
+	for (int i=0;i<71;i++) { line1[i]='\0'; }
+	watchdog_delay(2);
+	printf("AT+SAPBR=?\r\n");watchdog_delay(1);
+	printf("AT+SAPBR=1,1\r\n");watchdog_delay(1);
+	printf("AT+CIPGSMLOC=?\r\n");watchdog_delay(2);
+	printf("AT+CIPGSMLOC=1,1\r\n"); //Responce: +CIPGSMLOC: 0,36.833633,-1.304255,2019/03/22,10:08:02
+	while (a < 2) //skip the 2 <LF>
+	{	w = getchar();
+		if (w==0x0A) { a++; }
+		else {}
+	}
+	w = getchar();
+	while (w !=  0x0A) /*while w is not <LF>*/
+	{	line1[p]=w; if (w==0X2C){comma[j]=p; j++;}  else{}
+	w = getchar(); p++;} //start storing GSM Loc data to Line1 string till <LF>
+
+		watchdog_delay(1);
+
+		printf("AT\r\n"); watchdog_delay(1);
+		printf("AT+CMGF=1\r\n");watchdog_delay(1);
+
+	//****************************Now grab the previous sender's no#****************************************//
+		EEOpen();
+		_delay_loop_2(0);
+		for(address=26;address<39;address++)
+		{	L = EEReadByte(address);
+			phone[address-26] = L;
+		}
+		phone[13]=0x00;
+
+	//****************Retrieve Transmission Delay*********************************************//
+			char q; int T=0;
+			_delay_ms(200);
+			EEOpen();
+			_delay_loop_2(0);
+			q = EEReadByte(54);
+			//NOTE: transmission by default happens after around 40sec
+			if	   (q==0x31) { T=1;}	//1-1min,
+			else if(q==0x32) { T=10;}	//2-10min
+			else if(q==0x33) { T=30;}	//3-30min
+			else if(q==0x34) { T=60;}	//4-1hr
+			else   {}
+	/*********************************************************/
+		watchdog_delay(1); printf("AT+CMGS=\"%s\"\r\n", phone); watchdog_delay(1);
+
+		printf("ID: %s || Owner: %s\r\nTransmission Interval: %d Minutes\r\nLocation: http://maps.google.com/maps?q=", ID, CarOwner, T);
+		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} printf(",");
+		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} printf("\r\n:");
+		p=comma[2]; for (int i=p+1;i<70;i++) { printf("%c", line1[i]);}
+		_delay_ms(500);
+		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
+		watchdog_delay(2);
+
+		for (int i=0;i<70;i++)
+		{ line1[i]='\0'; }
+		for (int i=0;i<5;i++)
+		{ comma[i]='\0'; }
+		//Clear the Text flag in EEPROM	
+		EEOpen();
+		_delay_loop_2(0);
+		//Set flag to send location data later
+		EEWriteByte(55,0);
+	}  
+
+
 void WDT_off(void)
 {
 	cli();
@@ -782,4 +787,40 @@ void WDT_Prescaler_Change(void)
 	/* Set new prescaler(time-out) value = 64K cycles (~8 s) */
 	WDTCSR = (1<<WDE) | (1<<WDP3) | (1<<WDP0);
 	sei();
+}
+
+void Track() //<LOCATION>
+{
+	char location[5];
+	char match[]="LOC>";
+	int Flag=0, p=0;
+	w = getchar();
+	while(Flag==0)
+	{
+		location[p]=w;
+		p++;
+		w = getchar();
+		if (w==0X3E)// || p==9 || w==0X0A) //if w is ">",LF or we have reached 9 char
+		{Flag=1;}
+		else{}
+	}
+	location[p]=w;
+	p=0;
+	for (int y=0; y<4; y++) //compare the 2 strings
+	{
+		if (location[y]!=match[y]) {p++;}
+		else{}
+	}
+	if (p==0)
+	{ 
+		/******Set Text Flag in EEPROM*******/
+		//Init EEPROM
+		EEOpen();
+		_delay_loop_2(0);
+		//Set flag to send location data later
+		if (Flag==1)
+			 {EEWriteByte(55,1);}
+		else {EEWriteByte(55,0);}
+	}
+	
 }
