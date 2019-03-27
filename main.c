@@ -755,7 +755,7 @@ void SendConf_Text()
 	/*********************************************************/
 		watchdog_delay(1); printf("AT+CMGS=\"%s\"\r\n", phone); watchdog_delay(1);
 
-		printf("ID: %s || Owner: %s || Transmission Interval: %d Minutes\r\nhttp://maps.google.com/maps?q=", ID, CarOwner, T); //Location ~200m radius Accurate:
+		printf("ID: %s || Owner: %s || Transmission Interval: %d Minutes\r\n(~200m Accurate) http://maps.google.com/maps?q=", ID, CarOwner, T); //Location ~200m radius Accurate:
 		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf(",");_delay_ms(50);
 		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf("\r\n");_delay_ms(50);
 		p=comma[2]; for (int i=p+1;i<70;i++) { printf("%c", line1[i]);}
