@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 25/03/2019 5:37:46 PM
+ * Created: 22/03/2019 5:37:46 PM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -161,8 +161,8 @@ int main( void )
 	
 	fdev_close();
 	stdin = &uart0_input;
-	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isnt working
-	_delay_us(500);
+	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isn't working
+	_delay_us(500);	
 		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 	EEOpen(); //grab the owner's no# from memory before matching it with the sender
@@ -247,7 +247,7 @@ ISR(PCINT0_vect)
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 	watchdog_delay(3);
 	 
-	if((PINA & (1<<PINA0))){/* _delay_ms(1000); */checknewSMS();}
+	if((PINA & (1<<PINA0))){checknewSMS();}
 	else
 	{ printf("ATA\r\n"); watchdog_delay(15); }
 	
@@ -312,32 +312,32 @@ unsigned char CheckSMS()
 				CreateDraft(w);
 			}
 			else //A scenario of receiving text from Unauthorized no#
-			{	status[0] = 2; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
+			{	printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
 		 }
 		else if (w==0x24) //If a $ is received
-		{	IP_Change_Command(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+		{	IP_Change_Command(); status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 
 		else if (w==0x23) //If a # is received
-		{	Change_owner();  status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+		{	Change_owner();  status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 		
 		else if (w==0x26) //If a & is received
-		{	Trans_Delay(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+		{	Trans_Delay(); status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 
 		else if (w==0x3C) //If a < is received
-		{	Track(); status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
+		{	Track(); status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); T=1;}
 			
 		else
-		{	status[0] = 6; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
+		{	status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); } //clearing all SMS in storage AREA except Draft and UNREAD SMS
 	}
 	else if(w==0x04F) // if w = 'O'
 	{
 			w = getchar();
 			if (w==0x04B) // if w = 'K'  If there is no new message
-			{	status[0] = 3; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
+			{	status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 			else
-			{	status[0] = 4; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
+			{	status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 	}
-	else {	status[0] = 5; status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
+	else {	status[1] = status[2] = status[3] = 0; printf("AT+CMGD=1,2\r\n"); }
 		
 	/////////////////////////////////////////////////////
 		
@@ -739,7 +739,6 @@ void SendConf_Text()
 			phone[address-26] = L;
 		}
 		phone[13]=0x00;
-
 	//****************Retrieve Transmission Delay*********************************************//
 			char q; int T=0;
 			_delay_ms(200);
@@ -755,9 +754,9 @@ void SendConf_Text()
 	/*********************************************************/
 		watchdog_delay(1); printf("AT+CMGS=\"%s\"\r\n", phone); watchdog_delay(1);
 
-		printf("ID: %s || Owner: %s || Transmission Interval: %d Minutes\r\n(~200m Accurate) http://maps.google.com/maps?q=", ID, CarOwner, T); //Location ~200m radius Accurate:
-		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf(",");_delay_ms(50);
-		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf("\r\n");_delay_ms(50);
+		printf("ID: %s || Owner: %s || Interval: %d Minutes\r\n(~200m Accurate) http://maps.google.com/maps?q=", ID, CarOwner, T); //Location ~200m radius Accurate:
+		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf(","); _delay_ms(50);
+		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf("\r\n"); _delay_ms(50);
 		p=comma[2]; for (int i=p+1;i<70;i++) { printf("%c", line1[i]);}
 		_delay_ms(500);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
