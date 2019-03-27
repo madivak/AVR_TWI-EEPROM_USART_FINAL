@@ -2,7 +2,7 @@
 /*
  * GPS-UART-BUF.c
  *
- * Created: 26/03/2019 5:37:46 PM
+ * Created: 25/03/2019 5:37:46 PM
  * Author : Madiva
  */ 
 #define F_CPU 1000000UL
@@ -46,9 +46,9 @@ uint8_t failed;
 
 char input;
 char buff[20];
-char company[]	= "+XXXXXXXXXXXX";
+char company[]	= "+254XXXXXXXXX";
 char CarOwner[13];
-char company2[]	= "+XXXXXXXXXXXX";
+char company2[]	= "+254XXXXXXXXX";
 
 //static FILE uart0_output = FDEV_SETUP_STREAM(USART0_Transmit, NULL, _FDEV_SETUP_WRITE);
 static FILE uart1_output = FDEV_SETUP_STREAM(USART1_Transmit, NULL, _FDEV_SETUP_WRITE);
@@ -74,7 +74,7 @@ int watchdog_delay(int i);
 void Trans_Delay(); //To change delay time text-> &X , where X is either [1-4] : 1-1min,2-10min,3-30min,4-1hr
 void Blink_LED();
 void SendConf_Text();
-void Track(); //send text to request for Location <LOCATION>
+void Track(); //send text to request for Location <LOC>
 
 /*current EEPROM Structure
 #--0[IP+PORT]23--25[vehicle_status]--26[sender_Mobile]39--40[Owner_Mobile]53---54[Trans_Delay]--55[Text status]
@@ -121,16 +121,11 @@ void setup()
 	DDRC |= (1<<DDC4); //set PORTB0 AS acc output
 	DDRA |= (1<<DDA5); //set PORTB0 AS GSM-power output
 	DDRA |= (1<<DDA4); //set PORTB0 AS GSM-RST output
-	PCICR	|= (1<<PCIE0); //set interrupt enable
-	PCMSK0	|= (1<<PCINT0); //set interrupt mask bit on PA0
+
 	
-	wakeGSM;
-	_delay_ms(4000);
-	wakeGSM1;
-	wdt_reset();
-	
- 	CAR_OFF;
- 	ACC_OFF;
+/*	cli();*/
+	CAR_OFF;
+	ACC_OFF;
 	
 	char L;
 	EEOpen();
@@ -141,8 +136,17 @@ void setup()
 	else if (L == 0x031) //If vehicle status is '1' Then switch ON the vehicle
 	{ CAR_ON; ACC_ON; status[0]= L;}
 	else {}
-		
+	//Powering up the GSM	
+	wakeGSM;
+	_delay_ms(4000);
+	wakeGSM1;
+	_delay_ms(3000);
+	
+	//Enable interrupts at this stage cause it was firing off prematurely when GSM boots up above
+	PCICR	|= (1<<PCIE0); //set interrupt enable
+	PCMSK0	|= (1<<PCINT0); //set interrupt mask bit on PA0
 	WDT_Prescaler_Change(); //change wdt prescaler to 8 Sec
+	
 }
 
 int main( void )
@@ -150,11 +154,15 @@ int main( void )
 	USART1_Init(MYUBRR);
 	USART0_Init(MYUBRR);
 	setup();
+	//Below 2 lines ensure the GSM is reset successfully, otherwise delay >8sec to trigger RESET
+	if((PINA & (1<<PINA0))){} 
+	else{_delay_ms(10000);}
+	//sei(); //Enable global interrupts by setting the SREG's I-bit
 	
 	fdev_close();
 	stdin = &uart0_input;
-	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 for someweird reason on Atmega1284p SMD isnt working
-	_delay_us(1000);	
+	stdout = &uart1_output; //changed to TX1 for GSM communication. TX0 on Atmega SMD isnt working
+	_delay_us(500);
 		
 	//*********************************GRAB OWNER'S NUMBER********************************************//
 	EEOpen(); //grab the owner's no# from memory before matching it with the sender
@@ -171,7 +179,7 @@ int main( void )
 	watchdog_delay(1);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 	watchdog_delay(2);
-	printf("AT+CFUN=1\r\n"); watchdog_delay(5);
+	printf("AT+CFUN=1\r\n"); watchdog_delay(4);
 	
 	int T;
 	EEOpen();
@@ -181,10 +189,8 @@ int main( void )
 	else{}
 		
 	checknewSMS();
-
 	S=0;	
- 	sei(); //Enable global interrupts by setting the SREG's I-bit
-	
+ 	
 	fdev_close();
 	stdout = &uart1_output;
 	stdin = &uart1_input;		
@@ -215,7 +221,7 @@ int main( void )
 /*********************************************************/
 		S++;
 		if (S==100)
-		{ S=0; RST_GSM1; watchdog_delay(1); RST_GSM2; watchdog_delay(5); printf("AT+CFUN=1\r\n"); watchdog_delay(5); }
+		{ S=0; _delay_ms(15000);} //This will reset the device after every 100 transmissions
 		else { }
 	}
 	return 0;
@@ -237,20 +243,25 @@ ISR(PCINT0_vect)
 	}
 	CarOwner[13]=0x00;
 	//***********************************************************************************************//
-	watchdog_delay(1);
+//	watchdog_delay(1);
 	putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 	watchdog_delay(3);
-	putchar(0x1A); //running it twice cause the GSM sometimes acts-up
-	watchdog_delay(2);
 	 
-	if((PINA & (1<<PINA0))){ _delay_ms(1000); checknewSMS();}
+	if((PINA & (1<<PINA0))){/* _delay_ms(1000); */checknewSMS();}
 	else
-	{  printf("ATA\r\n"); watchdog_delay(15); }
+	{ printf("ATA\r\n"); watchdog_delay(15); }
 	
 	_delay_ms(500);
 	fdev_close();
 	stdout = &uart1_output;
 	stdin = &uart1_input;
+	_delay_ms(500);wdt_reset();
+	HTTPTransmit1 ();
+	_delay_us(500);wdt_reset();
+	grabGPS();
+	_delay_us(500);wdt_reset();
+	HTTPTransmit2 ();
+	_delay_us(2000);wdt_reset();
 }
 
 int watchdog_delay(int i)
@@ -264,7 +275,7 @@ void Blink_LED()
 
 unsigned char CheckSMS()
 {
-	int z = 0, T=0;
+	int z = 0, T=0; //char w;
 	y=0; p=100;
 	a=0;
 	printf("AT\r\n");
@@ -378,7 +389,7 @@ void checknewSMS()
 				else {}
 			} 
 			else
-			{printf("AT+CFUN=1\r\n"); watchdog_delay(5); }
+			{printf("AT+CFUN=1\r\n"); _delay_ms(15000); }
 		watchdog_delay(1);
 }
 
@@ -433,7 +444,7 @@ unsigned char CompareNumber()
 	return *status;
 }
 
-void HTTPTransmit1 () //char *GPS0, char *GPS1, char *number)
+void HTTPTransmit1 ()
 {
 	printf("AT\r\n");
   	watchdog_delay(1);
@@ -571,9 +582,9 @@ void grabGPS()
 				putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
 				watchdog_delay(2);
 
-				free(GGA); 	//The memory location pointed by GGA is freed. Otherwise it will cause error
-				free(RMC);	//The RMC string
-				free(Digits);	//The  Digits string
+				free(GGA); //The memory location pointed by GGA is freed. Otherwise it will cause error
+				free(RMC); //The memory location pointed by RMC is freed. Otherwise it will cause error
+				free(Digits);
 				_delay_ms(500);
 			}
 			else{}
@@ -704,7 +715,7 @@ void SendConf_Text()
 	printf("AT+SAPBR=?\r\n");watchdog_delay(1);
 	printf("AT+SAPBR=1,1\r\n");watchdog_delay(1);
 	printf("AT+CIPGSMLOC=?\r\n");watchdog_delay(2);
-	printf("AT+CIPGSMLOC=1,1\r\n"); //Responce: +CIPGSMLOC: 0,36.833633,-1.304255,2019/03/22,10:08:02
+	printf("AT+CIPGSMLOC=1,1\r\n"); //+CIPGSMLOC: 0,36.833633,-1.304255,2019/03/22,10:08:02
 	while (a < 2) //skip the 2 <LF>
 	{	w = getchar();
 		if (w==0x0A) { a++; }
@@ -744,9 +755,9 @@ void SendConf_Text()
 	/*********************************************************/
 		watchdog_delay(1); printf("AT+CMGS=\"%s\"\r\n", phone); watchdog_delay(1);
 
-		printf("ID: %s || Owner: %s\r\nTransmission Interval: %d Minutes\r\nLocation: http://maps.google.com/maps?q=", ID, CarOwner, T);
-		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} printf(",");
-		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} printf("\r\n:");
+		printf("ID: %s || Owner: %s || Transmission Interval: %d Minutes\r\nhttp://maps.google.com/maps?q=", ID, CarOwner, T); //Location ~200m radius Accurate:
+		p=comma[1]; j=comma[2]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf(",");_delay_ms(50);
+		p=comma[0]; j=comma[1]; for (int i=p+1;i<j;i++) { printf("%c", line1[i]);} _delay_ms(50); printf("\r\n");_delay_ms(50);
 		p=comma[2]; for (int i=p+1;i<70;i++) { printf("%c", line1[i]);}
 		_delay_ms(500);
 		putchar(0x1A); //putting AT-MSG termination CTRL+Z in USART0
@@ -808,16 +819,16 @@ void Track() //<LOCATION>
 	p=0;
 	for (int y=0; y<4; y++) //compare the 2 strings
 	{
-		if (location[y]!=match[y]) {p++;}
+		if (location[y]!=match[y]) {p++;}// printf("%c(%d)\r\n",location[y],y);}
 		else{}
 	}
 	if (p==0)
 	{ 
 		/******Set Text Flag in EEPROM*******/
-		//Init EEPROM
-		EEOpen();
-		_delay_loop_2(0);
-		//Set flag to send location data later
+			//Init EEPROM
+			EEOpen();
+			_delay_loop_2(0);
+			//Set flag to send location data later
 		if (Flag==1)
 			 {EEWriteByte(55,1);}
 		else {EEWriteByte(55,0);}
